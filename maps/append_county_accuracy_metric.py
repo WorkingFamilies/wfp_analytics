@@ -1,7 +1,7 @@
 from political_geospatial import process_area_weighted_metric, create_state_stats
 from mapping_utilities import load_generic_file
 from dataset_utilities import filter_by_quantile
-from state_leg__fix_specific_state import standardize_precinct_data, fix_bad_states_data
+from fix_specific_state import standardize_precinct_data, fix_bad_states_data
 import time 
 import os 
 import matplotlib.pyplot as plt

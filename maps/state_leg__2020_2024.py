@@ -6,98 +6,11 @@ import shapely
 from shapely.geometry import shape
 import matplotlib.pyplot as plt
 from mapping_utilities import get_all_mapfiles, concatenate_geodata
-from political_geospatial import create_state_stats
+from political_geospatial import create_state_stats, load_and_prepare_precincts, load_and_prepare_state_leg_districts, calculate_coverage, calculate_split_precinct_coverage, process_votes_area_weighted, merge_in_2020_data
+from include_historical_data import prepare_2016_v_2020_data, merge_in_2020_data
 import os
 import time
 import fiona
-from nyt_2024_process_and_overlay import *
-
-
-def prepare_2016_v_2020_data(
-    gpkg_directory__16_v_20=r"/Users/aspencage/Documents/Data/output/g2024/2020_2016_pres_state_leg",
-    incl_geo=False
-):
-    """
-    Loads 2016 vs. 2020 data from multiple .gpkg files and filters to relevant columns.
-    """
-    # Path to the folder containing multiple .gpkg files
-    gpkg_files = get_all_mapfiles(
-        gpkg_directory__16_v_20,
-        extension=".gpkg",
-        filename_regex=".*_SLDL.*"
-    )
-    gdf_2020 = concatenate_geodata(gpkg_files, print_=0)
-
-    keep_cols = [
-        "State",
-        "District", 
-        "pres_dem_share_total_2020",
-        "pres_dem_share_two_way_2020",
-        "third_party_vote_share_2020",
-        # possibly more columns if needed
-    ] 
-    if incl_geo:
-        keep_cols.append("geometry")
-
-    # Ensure District IDs are unique across states
-    gdf_2020["District Number"] = gdf_2020["District"]
-    gdf_2020["District"] = gdf_2020["State"] + "-" + gdf_2020["District"].astype(str)
-
-    gdf_2020 = gdf_2020[keep_cols].copy()
-
-    return gdf_2020
-
-
-def merge_in_2020_data(results_2024, gdf_2020):
-    """
-    Merges 2020 data into 2024 results on District, calculates differences,
-    and sets up a consistent column ordering.
-    """
-    grouped = results_2024.merge(gdf_2020, on='District', how='left')
-
-    # Calculate differences
-    grouped['pres_dem_share_total_diff'] = grouped['pres_dem_share_total_2024'] - grouped['pres_dem_share_total_2020']
-    grouped['pres_dem_share_two_way_diff'] = grouped['pres_dem_share_two_way_2024'] - grouped['pres_dem_share_two_way_2020']
-    grouped['third_party_vote_share_diff'] = grouped['third_party_vote_share_2024'] - grouped['third_party_vote_share_2020']
-
-    # Example "likely_error_detected" threshold
-    grouped['likely_error_detected'] = np.where(
-        grouped['pres_dem_share_two_way_diff'].abs() > 0.20,
-        "Greater than 20 pp swing",
-        None
-    )
-
-    column_order = [
-        'State',
-        'District',
-        'coverage_percentage',
-        'split_coverage_percentage', 
-        'likely_error_detected',
-        'accuracy_score',
-        'votes_rep_by_area_2024',
-        'votes_dem_by_area_2024', 
-        'votes_third_party_by_area_2024',
-        'votes_total_by_area_2024', 
-        'votes_two_way_by_area_2024',
-        'pres_dem_share_total_2024', 
-        'pres_dem_share_two_way_2024',
-        'third_party_vote_share_2024', 
-        'pres_dem_share_total_2020', 
-        'pres_dem_share_two_way_2020',
-        'third_party_vote_share_2020',
-        'pres_dem_share_total_diff',
-        'pres_dem_share_two_way_diff',
-        'third_party_vote_share_diff',
-        'geometry'
-    ]
-    # Reorder columns (if they exist)
-    try:
-        grouped = grouped[column_order]
-    except KeyError:
-        print("Some columns from column_order are not present in the dataframe.")
-    
-    return grouped 
-
 
 if __name__ == "__main__":
 
@@ -131,10 +44,9 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     coverage_gdf = calculate_coverage(precincts_2024, districts)
     coverage_split_gdf = calculate_split_precinct_coverage(precincts_2024, coverage_gdf)
-    coverage_stats_by_state = create_state_stats(coverage_split_gdf).sort_values(
-        "accuracy_score", ascending=True
-    )
-    print("\nCoverage Stats by State (Sorted by accuracy_score):")
+    coverage_stats_by_state = create_state_stats(coverage_split_gdf)
+
+    print("\nCoverage Stats by State:")
     print(coverage_stats_by_state.head(10))
 
     # -------------------------------------------------------------------------

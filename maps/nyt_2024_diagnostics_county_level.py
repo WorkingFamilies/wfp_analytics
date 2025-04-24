@@ -2,20 +2,18 @@ import matplotlib.pyplot as plt
 import time 
 import os
 
-from nyt_2024_process_and_overlay import * 
+from political_geospatial import * 
 from mapping_utilities import get_all_mapfiles
 
 if __name__ == "__main__":
     # -------------------------------
     # File paths 
     # -------------------------------
-    fp_precinct_geojson_2024 = (
-        r"/Users/aspencage/Documents/Data/output/post_2024/"
-        r"2020_2024_pres_compare/nyt_pres_2024_simplified.geojson"
-    ) # NOTE - this is the NYT TopoJSON file, adjusting with a command line utility to GeoJSON
-    fp_precincts__by_state_2024 = (
-        r"/Users/aspencage/Documents/Data/input/post_g2024/nyt_2024_prez_data/geojsons-by-state"
-    ) # NOTE this is the NYT GeoJSONs for each state, downloaded one-by-one
+    # Output of state_leg__fix_precinct_testing
+    fp_precincts_fixed_2024 = (
+        r'/Users/aspencage/Documents/Data/output/post_2024/'
+        r'2020_2024_pres_compare/precincts__2024_pres__fixed__20250314_181817.gpkg'
+    ) # currently PA and WI are overwritten with the official data
 
     county_shapefile = (
         r"/Users/aspencage/Documents/Data/input/post_g2024/"
@@ -29,54 +27,64 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # A) LOAD AND PREPARE DATA
     # -------------------------------------------------------------------------
-
-    districts = load_and_prepare_counties(county_shapefile, crs="EPSG:3857")
+    state_col = 'State'
+    selected_states = ["NJ","VA","PA","NC","AZ","MI","WI"]
     
-    # NOTE - instead of loading from NYT precinct, where data is fixed from NYT precinct, we should use that gpkg instead
-    nyt_geojson_fps = get_all_mapfiles(fp_precincts__by_state_2024, extension=".geojson",print_=False)
+    counties = load_and_prepare_counties(county_shapefile, crs="EPSG:2163")
+
+    if selected_states is not None:
+        counties = counties[counties[state_col].isin(selected_states)]
+    # precincts_2024 already loaded
+    
+
+    # precinct level data 
     precincts_2024 = load_and_prepare_precincts(
-        fp_precinct_geojson_2024, crs="EPSG:3857"
+        fp_precincts_fixed_2024, 
+        crs="EPSG:2163",
+        drop_na_columns=["votes_dem","votes_rep"], # previously included 'votes_total' and 'geometry'
+        print_=True
     )
 
-    # -------------------------------------------------------------------------
-    # B) CALCULATE COVERAGE AND SPLIT PRECINCTS
-    # -------------------------------------------------------------------------
-    coverage_gdf = calculate_coverage(precincts_2024, districts, district_col='County')
-    coverage_split_gdf = calculate_split_precinct_coverage(precincts_2024, coverage_gdf, district_col='County')
-    coverage_stats_by_state = create_state_stats(coverage_split_gdf)
+    if selected_states is not None:
+        precincts_2024 = precincts_2024.loc[precincts_2024[state_col].isin(selected_states)]
 
     # -------------------------------------------------------------------------
-    # C) PROCESS AREA-WEIGHTED VOTE TOTALS (e.g., 2024)
+    # CALCULATE COVERAGE AND SPLIT PRECINCTS
+    # -------------------------------------------------------------------------
+    county_coverage = calculate_coverage(precincts_2024, counties, district_col='County')
+    county_coverage_split = calculate_split_precinct_coverage(precincts_2024, county_coverage, district_col='County')
+
+    # -------------------------------------------------------------------------
+    # PROCESS AREA-WEIGHTED VOTE TOTALS (e.g., 2024)
     # -------------------------------------------------------------------------
     # Assume precincts_2024 has 'votes_dem', 'votes_rep', 'votes_total', etc.
-    print("\nCalculating area-weighted vote totals for 2024...")
-    coverage_split_gdf.rename(columns={"GEOID":"fips"},inplace=True)
-    final_2024_gdf = process_votes_area_weighted(
+    print("\nCalculating area-weighted vote totals for 2024 in counties...")
+    county_coverage_split.rename(columns={"GEOID":"fips"},inplace=True)
+    county_diagnostics_gdf = process_votes_area_weighted(
         gdf_precinct=precincts_2024,
-        gdf_districts=coverage_split_gdf, 
+        gdf_districts=county_coverage_split, 
         year="2024",
         district_col="County",
         extra_district_cols=[
-          "coverage_percentage",
-          "split_coverage_percentage",
-          "fips"
+        "coverage_percentage",
+        "split_coverage_percentage",
+        "fips"
         ]
     )
 
-
     # -------------------------------------------------------------------------
-    # D) SAVE AND/OR PLOT RESULTS
+    # SAVE AND/OR PLOT RESULTS
     # -------------------------------------------------------------------------
     print(f"\nSaving final coverage & vote data to {outfile_base} as .gpkg and .csv...")
-    final_2024_gdf.to_file(outfile_base+".gpkg", layer="sldl_coverage", driver="GPKG")
-    df_no_geom = final_2024_gdf.drop(columns="geometry")
+    county_diagnostics_gdf.to_file(outfile_base+".gpkg", layer="sldl_coverage", driver="GPKG")
+    df_no_geom = county_diagnostics_gdf.drop(columns="geometry")
     df_no_geom.to_csv(outfile_base + ".csv", index=False)
     print("Saved successfully.\n")
 
     # Basic coverage plots
     fig, ax = plt.subplots(1, 2, figsize=(18, 8))
 
-    final_2024_gdf.plot(
+    county_diagnostics_gdf.plot(
         column="coverage_percentage",
         cmap="viridis",
         legend=True,
@@ -85,7 +93,7 @@ if __name__ == "__main__":
     )
     ax[0].set_title("Precinct Coverage (%)")
 
-    final_2024_gdf.plot(
+    county_diagnostics_gdf.plot(
         column="split_coverage_percentage",
         cmap="magma",
         legend=True,

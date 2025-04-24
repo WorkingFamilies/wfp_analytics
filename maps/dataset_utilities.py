@@ -2,13 +2,61 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 
+from fuzzy_match import *
 
-import pandas as pd
-import pandas as pd
-import numpy as np
+def verbose_merge(df1, df2, left_on, right_on, how="outer", verbose=True):
+    """
+    Merges two datasets and prints out merge statistics, while also adding a column
+    indicating whether each row came from the left dataframe only, the right dataframe only, or both.
 
-import numpy as np
-import pandas as pd
+    Args:
+        df1 (pd.DataFrame): First dataframe.
+        df2 (pd.DataFrame): Second dataframe.
+        left_on (str or list): Column(s) to merge on from df1.
+        right_on (str or list): Column(s) to merge on from df2.
+        how (str): Type of merge ('left', 'right', 'inner', 'outer'). Default is 'outer'.
+        verbose (bool): If True, prints merge statistics.
+
+    Returns:
+        pd.DataFrame: Merged dataframe with an additional column 'merge_source' indicating the source of each row.
+    """
+    
+    # Merge the datasets with an indicator column
+    merged_df = df1.merge(df2, left_on=left_on, right_on=right_on, how=how, indicator=True)
+    
+    # Map merge indicator values to more descriptive labels
+    merged_df["merge_source"] = merged_df["_merge"].map({
+        "both": "merged",
+        "left_only": "left_only",
+        "right_only": "right_only"
+    })
+    
+    # Calculate merge statistics
+    total_merged_size = len(merged_df)
+    num_merged_from_both = (merged_df["_merge"] == "both").sum()
+    num_merged_from_left = (merged_df["_merge"] == "left_only").sum()
+    num_merged_from_right = (merged_df["_merge"] == "right_only").sum()
+
+    # Check for null values in merge keys
+    nulls_in_merge_key = (
+        merged_df[left_on].isnull().sum().sum() if isinstance(left_on, list) else merged_df[left_on].isnull().sum()
+    )
+    nulls_in_merge_key += (
+        merged_df[right_on].isnull().sum().sum() if isinstance(right_on, list) else merged_df[right_on].isnull().sum()
+    )
+
+    if verbose:
+        print(f"Total merged dataset size: {total_merged_size}")
+        print(f"Rows successfully merged from both datasets: {num_merged_from_both}")
+        print(f"Rows from df1 that did not merge: {num_merged_from_left}")
+        print(f"Rows from df2 that did not merge: {num_merged_from_right}")
+        print(f"Number of nulls in merge keys after merge: {nulls_in_merge_key}")
+
+    # Drop the original indicator column, keeping only the descriptive 'merge_source' column
+    merged_df.drop(columns=["_merge"], inplace=True)
+
+    return merged_df
+
 
 def prettify_dataset(
     df, 
@@ -290,3 +338,81 @@ def drop_duplicates_qualify(
         print(f"Dropped {dropped_rows} rows from {original_count} rows (remaining: {final_count}).")
 
     return out_df.reset_index(drop=True)
+
+
+def compare_column_difference(
+    df,
+    col1,
+    col2,
+    tolerance=0.01,
+    group_by=None
+):
+    """
+    Compare two columns in a DataFrame and print the number of rows
+    where their relative difference exceeds a specified tolerance.
+    Optionally group by one or more columns (e.g. "State") to see
+    per-group stats.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame containing the two columns.
+    col1 : str
+        The name of the first column.
+    col2 : str
+        The name of the second column.
+    tolerance : float, default=0.01
+        The relative difference threshold (e.g., 0.01 for 1%).
+    group_by : str or list of str, optional
+        Column name(s) to group by and produce a breakdown. If None,
+        only the total count is printed.
+
+    Returns
+    -------
+    count : int
+        Number of rows where the two columns differ beyond the tolerance.
+    """
+
+    if col1 not in df.columns or col2 not in df.columns:
+        raise ValueError(f"Columns '{col1}' and/or '{col2}' not found in the DataFrame.")
+
+    # Compute relative difference
+    diff = np.abs(df[col1] - df[col2])
+    denom = np.maximum(np.abs(df[col1]), np.abs(df[col2]))
+
+    # Avoid divide-by-zero issues
+    with np.errstate(divide='ignore', invalid='ignore'):
+        relative_diff = np.where(denom == 0, 0, diff / denom)
+
+    # Count how many rows exceed the tolerance
+    exceeds_tolerance = relative_diff > tolerance
+    count = exceeds_tolerance.sum()
+
+    # Print the overall total
+    print(f"{count} rows differ between '{col1}' and '{col2}' by more than {tolerance:.2%}.")
+
+    # If user wants a grouped breakdown
+    if group_by is not None:
+        # Convert a single group_by string to a list for consistency
+        if isinstance(group_by, str):
+            group_by = [group_by]
+
+        # Create a small helper Series with the relative_diff mask
+        df["_exceeds_tol_"] = exceeds_tolerance
+
+        # Group by the specified columns
+        grouped = df.groupby(group_by)
+
+        # For each group, count how many exceed tolerance
+        for name, group_df in grouped:
+            group_count = group_df["_exceeds_tol_"].sum()
+            group_total = len(group_df)
+            print(
+                f"Group={name}: {group_count} of {group_total} rows "
+                f"({group_count/group_total:.1%}) exceed {tolerance:.2%} diff."
+            )
+
+        # Clean up temporary column
+        df.drop(columns=["_exceeds_tol_"], inplace=True)
+
+    return count

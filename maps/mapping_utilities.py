@@ -3,9 +3,88 @@ import re
 import pandas as pd
 import geopandas as gpd
 import warnings
+from shapely import wkt, wkb
 
 
+def dissolve_groups(
+    gdf: gpd.GeoDataFrame,
+    *,
+    group_col: str,
+    geometry_col: str = "geometry"
+) -> gpd.GeoDataFrame:
+    """
+    Collapse a GeoDataFrame so that all rows sharing ``group_col`` are reduced
+    to a single row whose geometry is the union of their geometries.
 
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        The input GeoDataFrame.
+    group_col : str
+        Name of the column that defines which rows should be merged together.
+    geometry_col : str, default "geometry"
+        Name of the geometry column inside ``gdf`` (set this if your geometry
+        lives in a non-default column).
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        A new GeoDataFrame with one row per unique value in ``group_col`` and a
+        dissolved (unioned) geometry for each group.  All non-geometry columns
+        are aggregated with their *first* non-null value; edit the ``aggfunc``
+        dict inside the function if you need different behaviour.
+
+    Example
+    -------
+    >>> merged = dissolve_groups(county_precincts,
+    ...                           group_col="CountyFIPS",
+    ...                           geometry_col="geom")
+    """
+    if group_col not in gdf.columns:
+        raise KeyError(f"'{group_col}' not found in GeoDataFrame columns.")
+
+    if geometry_col not in gdf.columns:
+        raise KeyError(f"'{geometry_col}' not found in GeoDataFrame columns.")
+
+    # Work on a copy so we don't mutate the caller's GDF
+    gdf = gdf.copy()
+
+    original_count = len(gdf)
+    unique_groups = gdf[group_col].nunique()
+
+    # Make sure the desired geometry column is active
+    gdf = gdf.set_geometry(geometry_col)
+
+    # Dissolve: union geometry, keep the first non-null value for other cols
+    dissolved = (
+        gdf.dissolve(
+            by=group_col,
+            as_index=False,             # keep group column as a regular column
+            aggfunc="first"             # change to dict if you need custom aggs
+        )
+        .set_geometry("geometry")       # ensures 'geometry' is recognised
+    )
+
+    # Rename geometry column back if the user passed a non-default name
+    if geometry_col != "geometry":
+        dissolved = dissolved.rename(columns={"geometry": geometry_col})
+        dissolved = dissolved.set_geometry(geometry_col)
+
+    # Print summary
+    print(f"[dissolve_groups] Combined {original_count:,} rows into {unique_groups:,} grouped geometries.")
+
+    return dissolved
+
+def remove_geometry(gdf,geometry_col="geometry"):
+    """
+    Remove geometry from a GeoDataFrame and return a DataFrame.
+    """
+    if geometry_col not in gdf.columns:
+        print(f"Warning: '{geometry_col}' not found in GeoDataFrame columns.")
+        return gdf.copy()  # Return a copy of the original GeoDataFrame
+    else:
+        df = pd.DataFrame(gdf.drop(columns=geometry_col))
+    return df
 
 def fix_invalid_geometries(gdf):
     """
@@ -171,6 +250,7 @@ def process_district_data(gdf, state, crs="EPSG:2163"):
 
     return gdf, district_col
 
+
 def get_all_mapfiles(directory_paths, extension=".geojson", filename_regex=None, print_=False):
     """
     Recursively find all map files with the specified extension in one or more directories
@@ -288,6 +368,17 @@ def map_fips_and_state(value):
         return "Invalid input"
     
 
+def map_code_to_value(input,map_dict):
+    map_reversed = {v: k for k, v in map_dict.items()}
+
+    if input in map_dict:
+        return map_dict[input]
+    elif input in map_reversed:
+        return map_reversed[input]
+    else:
+        return "Invalid input"
+    
+
 def extract_fips_from_path(path):
     # Extract the filename
   filename = os.path.basename(path)
@@ -390,3 +481,76 @@ def filter_shapefile_paths(shapefile_paths, state_table, print_=False):
             filtered_paths.append(path)
 
     return filtered_paths
+
+
+def load_as_gdf(
+    csv_path,
+    geometry_col='geometry',
+    crs="EPSG:2163",
+    guess_format='auto'
+):
+    """
+    Load a CSV file and convert a geometry column into a GeoDataFrame.
+    Automatically attempts to parse geometry in WKT or WKB format 
+    unless 'guess_format' is specifically set to 'wkt' or 'wkb'.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the CSV file.
+    geometry_col : str, optional
+        Name of the column that contains geometry data (default: 'geometry').
+    crs : str or dict, optional
+        The coordinate reference system to set on the resulting GeoDataFrame.
+        (e.g. 'EPSG:4326'). If None, no CRS is set.
+    guess_format : {'auto', 'wkt', 'wkb'}, optional
+        Whether to auto-detect geometry format, or force parse as WKT or WKB.
+        (Default: 'auto').
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        A GeoDataFrame with parsed geometry.
+    """
+
+    # 1. Read the CSV with pandas
+    df = pd.read_csv(csv_path)
+
+    # 2. Check that the geometry column exists
+    if geometry_col not in df.columns:
+        raise ValueError(f"Specified geometry_col '{geometry_col}' not found in CSV columns.")
+
+    # 3. If guess_format == 'auto', attempt to detect WKT vs. WKB
+    if guess_format == 'auto':
+        # We'll sample the first non-null row of the geometry column
+        sample_val = df[geometry_col].dropna().iloc[0] if not df[geometry_col].dropna().empty else None
+        
+        if sample_val is None:
+            # No geometry data at all
+            # Return an empty GDF or raise an error, whichever suits your workflow
+            return gpd.GeoDataFrame(df, geometry=None, crs=crs)
+        
+        # If the sample is a string that starts with POINT/POLYGON/etc., assume WKT.
+        # Otherwise, assume WKB (often stored as hex strings).
+        # This is very simplistic logic; adjust as needed for your data.
+        upper_val = str(sample_val).strip().upper()
+        if any(upper_val.startswith(tok) for tok in ("POINT", "LINESTRING", "POLYGON", "MULTIPOLYGON", "MULTILINESTRING")):
+            guess_format = 'wkt'
+        else:
+            guess_format = 'wkb'
+
+    # 4. Parse geometry
+    if guess_format == 'wkt':
+        # WKT parsing
+        df[geometry_col] = df[geometry_col].apply(lambda x: wkt.loads(x) if pd.notnull(x) else None)
+    elif guess_format == 'wkb':
+        # WKB parsing (assuming geometry data is a hex string). 
+        # If your data is base64-encoded or actual binary, adjust accordingly.
+        df[geometry_col] = df[geometry_col].apply(lambda x: wkb.loads(bytes.fromhex(x)) if pd.notnull(x) else None)
+    else:
+        raise ValueError("guess_format must be 'auto', 'wkt', or 'wkb'.")
+
+    # 5. Convert the DataFrame to a GeoDataFrame
+    gdf = gpd.GeoDataFrame(df, geometry=geometry_col, crs=crs)
+
+    return gdf
