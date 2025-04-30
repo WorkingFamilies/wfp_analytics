@@ -1,5 +1,5 @@
 
-from mapping_utilities import fix_invalid_geometries
+from maps.mapping_utilities import fix_invalid_geometries
 from typing import Union, List
 import geopandas as gpd
 import pandas as pd
@@ -14,15 +14,15 @@ from shapely.errors import TopologicalError
 from typing import Union, List
 
 # for now, including all functions into one import for ease of use 
-from prepare_precinct_data import *
-from prepare_district_data import *
-from include_historical_data import (
+from maps.prepare_precinct_data import *
+from maps.prepare_district_data import *
+from maps.include_historical_data import (
     prepare_2016_v_2020_data,
     merge_in_2020_data
 )
-from validation_geo_internal import * 
-from area_weighted_metrics import *
-from fix_specific_state import *
+from maps.validation_geo_internal import * 
+from maps.area_weighted_metrics import *
+from maps.fix_specific_state import *
 
 
 def create_state_stats(districts, cols=["coverage_percentage", "split_coverage_percentage"]):

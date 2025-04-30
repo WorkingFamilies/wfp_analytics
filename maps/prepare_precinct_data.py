@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 import os 
 import geopandas as gpd 
-from mapping_utilities import load_generic_file, concatenate_geodata, fix_invalid_geometries
-from dataset_utilities import fuzzy_match, global_fuzzy_match, drop_duplicates_qualify
+from maps.mapping_utilities import load_generic_file, concatenate_geodata, fix_invalid_geometries
+from maps.dataset_utilities import fuzzy_match, global_fuzzy_match, drop_duplicates_qualify
 import warnings
 import pandas as pd, geopandas as gpd
 import numpy as np
-from fuzzy_match import fuzzy_match        # still used for row-wise mode
+from maps.fuzzy_match import fuzzy_match        # still used for row-wise mode
 
 
 def attach_votes_to_precincts(

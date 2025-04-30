@@ -4,6 +4,83 @@ import pandas as pd
 import geopandas as gpd
 import warnings
 from shapely import wkt, wkb
+import geopandas as gpd
+from shapely.ops import unary_union
+from shapely.geometry import GeometryCollection
+
+import subprocess
+from pathlib import Path
+from typing import Union
+
+
+def repair_shapefile_with_ogr(
+    src: Union[str, Path],
+    dst: Union[str, Path] | None = None,
+    *,
+    layer: str | None = None,
+    promote_to_multi: bool = True,
+    overwrite: bool = True,
+    quiet: bool = True,
+) -> Path:
+    """
+    Create a *repaired* copy of a Shapefile using ``ogr2ogr`` + ST_MakeValid.
+
+    Parameters
+    ----------
+    src, dst : str or Path
+        Path to the input Shapefile (.shp).  ``dst`` is the output file; if
+        omitted, ``<src stem>__valid.shp`` is written alongside *src*.
+    layer : str, optional
+        Source layer name.  Usually the filename without extension; leave
+        ``None`` to let ogr2ogr pick the first (and only) layer.
+    promote_to_multi : bool, default True
+        Add ``-nlt PROMOTE_TO_MULTI`` so singleparts become multiparts and stay
+        valid after repair.
+    overwrite : bool, default True
+        Pass ``-overwrite`` so reruns replace the previous output.
+    quiet : bool, default True
+        Suppress ogr2ogr chatter (``-q``).
+
+    Returns
+    -------
+    Path
+        Path to the repaired Shapefile (.shp).
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        If ogr2ogr exits with a non-zero status (e.g. GDAL missing).
+    """
+    src = Path(src).with_suffix(".shp")
+    if dst is None:
+        dst = src.with_name(f"{src.stem}__valid.shp")
+    else:
+        dst = Path(dst).with_suffix(".shp")
+
+    # Build the SQL that makes every feature valid
+    lyr = layer or src.stem
+    sql = f'SELECT ST_MakeValid(geometry) AS geometry, * FROM "{lyr}"'
+
+    cmd = [
+        "ogr2ogr",
+        "-f",
+        "ESRI Shapefile",
+        str(dst),
+        str(src),
+        "-dialect",
+        "SQLite",
+        "-sql",
+        sql,
+    ]
+    if promote_to_multi:
+        cmd.extend(["-nlt", "PROMOTE_TO_MULTI"])
+    if overwrite:
+        cmd.append("-overwrite")
+    if quiet:
+        cmd.append("-q")
+
+    subprocess.run(cmd, check=True)
+    return dst
 
 
 def dissolve_groups(
@@ -100,6 +177,126 @@ def fix_invalid_geometries(gdf):
         print(f"Found {invalid_count} invalid geometries; attempting to fix...")
         gdf['geometry'] = gdf['geometry'].buffer(0)
     return gdf
+
+
+def check_mutual_exclusivity(
+    gdf: gpd.GeoDataFrame,
+    *,
+    area_tol: float = 1e-8,
+    pct_tol: float = 1e-4,
+    verbose: bool = True,
+    compact: bool = False,
+):
+    """Assess whether geometries in *gdf* are mutually exclusive (non‑overlapping).
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input GeoDataFrame whose ``geometry`` column has *projected* coordinates so
+        that ``area`` is meaningful.
+    area_tol : float, default 1e-8
+        Absolute area threshold – intersections smaller than this value are ignored.
+    pct_tol : float, default 1e-4 (0.01 %)
+        Relative threshold expressed as *fraction of the smaller* geometry’s area
+        below which the overlap is ignored.  For example, ``pct_tol=0.05`` allows
+        up to 5 % overlap of the smaller polygon.
+    verbose : bool, default True
+        If *True* print a human‑readable report.  Set to *False* for silent mode.
+    compact : bool, default False
+        If *True* the report omits the per‑pair details and shows only the summary.
+
+    Returns
+    -------
+    is_exclusive : bool
+        ``True`` if all geometries are exclusive within the given tolerances.
+    overlaps : geopandas.GeoDataFrame
+        One row per overlapping pair with columns
+        ``["idx1", "idx2", "overlap_area", "pct_smaller", "pct_larger"]``.
+    """
+
+    if gdf.crs is None:
+        raise ValueError(
+            "GeoDataFrame must have a projected CRS (e.g. EPSG:3857, EPSG:326xx) "
+            "so that area calculations make sense."
+        )
+
+    # Prepare a spatial index for fast bounding‑box queries
+    sindex = gdf.sindex
+    overlaps_records = []
+
+    for i, geom_i in enumerate(gdf.geometry):
+        if geom_i is None or geom_i.is_empty:
+            continue
+
+        # Candidate neighbours whose bounding boxes intersect
+        candidate_ids = list(sindex.intersection(geom_i.bounds))
+        for j in candidate_ids:
+            if j <= i:  # avoid duplicate & self comparisons
+                continue
+            geom_j = gdf.geometry.iloc[j]
+            if geom_j is None or geom_j.is_empty:
+                continue
+            # Quick rejection – if geometries don’t intersect there’s no overlap
+            if not geom_i.intersects(geom_j):
+                continue
+
+            inter = geom_i.intersection(geom_j)
+            if inter.is_empty:
+                continue
+
+            area = inter.area
+            if area < area_tol:
+                continue  # too small to care
+
+            pct_smaller = area / min(geom_i.area, geom_j.area)
+            pct_larger = area / max(geom_i.area, geom_j.area)
+            if pct_smaller < pct_tol:
+                continue  # within tolerance
+
+            overlaps_records.append(
+                {
+                    "idx1": gdf.index[i],
+                    "idx2": gdf.index[j],
+                    "overlap_area": area,
+                    "pct_smaller": pct_smaller,
+                    "pct_larger": pct_larger,
+                }
+            )
+
+    overlaps_gdf = gpd.GeoDataFrame(overlaps_records)
+    is_exclusive = overlaps_gdf.empty
+
+    if verbose:
+        if is_exclusive:
+            print(
+                f"\N{WHITE HEAVY CHECK MARK}  Geometries are mutually exclusive "
+                f"within tolerances (area_tol={area_tol}, pct_tol={pct_tol:.4%})."
+            )
+        else:
+            total_pairs = len(overlaps_gdf)
+            max_pct = overlaps_gdf["pct_smaller"].max()
+            mean_pct = overlaps_gdf["pct_smaller"].mean()
+            total_overlap_area = overlaps_gdf["overlap_area"].sum()
+            print(
+                f"\N{WARNING SIGN}  Found {total_pairs} overlapping pair(s).\n"
+                f"   • Total overlap area: {total_overlap_area:,.2f} (units of CRS)\n"
+                f"   • Largest % overlap of smaller geometry: {max_pct:.2%}\n"
+                f"   • Mean % overlap of smaller geometry: {mean_pct:.2%}"
+            )
+            if not compact:
+                pd_opt = {
+                    "overlap_area": "{:,.2f}".format,
+                    "pct_smaller": "{:.2%}".format,
+                    "pct_larger": "{:.2%}".format,
+                }
+                try:
+                    import pandas as pd  # local import to avoid mandatory dep
+                    print(overlaps_gdf.to_string(index=False, formatters=pd_opt))
+                except ImportError:
+                    # fallback if pandas isn’t available (unlikely in geopandas env)
+                    print(overlaps_gdf)
+
+    return is_exclusive, overlaps_gdf
 
 
 def load_generic_file(

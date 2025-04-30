@@ -25,7 +25,7 @@ import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import contextily as ctx
-from mapping_utilities import load_as_gdf
+from maps.mapping_utilities import load_as_gdf
 
 def display_simple_map(geo_path, column_name=None, add_basemap=True, show_nulls=False):
     """

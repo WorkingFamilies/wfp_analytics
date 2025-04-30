@@ -2,9 +2,9 @@
 import matplotlib.pyplot as plt
 import time 
 
-from political_geospatial import *
-from prepare_precinct_data import *
-from prepare_district_data import * 
+from maps.political_geospatial import *
+from maps.prepare_precinct_data import *
+from maps.prepare_district_data import * 
 
 if __name__ == "__main__":
     # -------------------------------

@@ -5,12 +5,12 @@ import numpy as np
 import shapely
 from shapely.geometry import shape
 import matplotlib.pyplot as plt
-from mapping_utilities import get_all_mapfiles, concatenate_geodata
-from political_geospatial import *
+from maps.mapping_utilities import get_all_mapfiles, concatenate_geodata
+from maps.political_geospatial import *
 import os
 import time
 import fiona
-from nyt_2024_process_and_overlay import *
+from maps.nyt_2024_process_and_overlay import *
 
 # This script is to house functions that are used to include historical data in the analysis.
 

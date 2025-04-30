@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-from mapping_utilities import (
+from maps.mapping_utilities import (
     process_district_data, 
     map_fips_and_state, 
     concatenate_geodata,
     fix_invalid_geometries,
     map_code_to_value
 )
-from mapping_dicts import pa_counties
+from maps.mapping_dicts import pa_counties
 
 # Description: Functions to prepare district data for use in district based analysis.
 

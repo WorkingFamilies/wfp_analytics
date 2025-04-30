@@ -8,10 +8,10 @@ from shapely.errors import TopologicalError
 from shapely.geometry import Polygon
 from typing import Union, List
 
-from political_geospatial import *
-from prepare_precinct_data import * 
-from include_historical_data import * 
-from mapping_utilities import load_as_gdf
+from maps.political_geospatial import *
+from maps.prepare_precinct_data import * 
+from maps.include_historical_data import * 
+from maps.mapping_utilities import load_as_gdf
 
 def create_diagnostic_table(
     old_df, 

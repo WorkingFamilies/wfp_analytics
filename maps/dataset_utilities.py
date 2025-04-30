@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 
-from fuzzy_match import *
+from maps.fuzzy_match import *
 
 def verbose_merge(df1, df2, left_on, right_on, how="outer", verbose=True):
     """

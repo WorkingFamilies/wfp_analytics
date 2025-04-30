@@ -3,14 +3,14 @@ import pandas as pd
 import os 
 import time
 
-from prepare_precinct_data import attach_votes_to_precincts  
-from political_geospatial import (
+from maps.prepare_precinct_data import attach_votes_to_precincts  
+from maps.political_geospatial import (
     load_and_prepare_precincts,
     calculate_coverage,
     calculate_split_precinct_coverage,
     process_votes_area_weighted,
 )
-from mapping_utilities import dissolve_groups
+from maps.mapping_utilities import dissolve_groups, remove_geometry
 
 os.chdir(r'/Users/aspencage/Documents/Data/projects/ohio_precinct_level_vote')
 
@@ -24,12 +24,13 @@ fp_past_precincts = (
   r'Cleveland Precincts Nov 2024_region.shp'
 )
 fp_future_precincts = (
-    r'input/2025_Cleveland_Wards Cuyahoga BOE Official_region/'
-    r'2025_Cleveland_Wards Cuyahoga BOE Official_region.shp'
+    r'input/May 06 2025 Active Precinct Portions_region/'
+    r'May 06 2025 Active Precinct Portions_region_repaired.shp'
     )
 vote_cols          = ["Ahn", "O'Malley", "Total Votes"]
 precinct_key_csv   = "PRECINCT"       # column in CSV
 precinct_key_geo  = "Name"       # column in shapefile
+precinct_key_future = 'Precinct_w'
 
 
 # ---------- 1. load data ----------
@@ -78,7 +79,7 @@ prec_votes.rename(columns={
 # NOTE - these designations are not correct since it was in the Dem primary
 
 precincts_future["State"] = "OH"
-precincts_future['Name'] = precincts_future['Ward'].astype(str) # to align for later functions
+precincts_future['Name'] = precincts_future[precinct_key_future].astype(str) # to align for later functions
 
 '''
 cov = calculate_coverage(
@@ -113,5 +114,14 @@ future_votes.drop(columns=[
   'pres_dem_share_two_way_2024', 'third_party_vote_share_2024'
   ], inplace=True)
 
+# remove those precincts with no votes (or less than 1 vote)
+future_votes = future_votes[future_votes['votes_total_weighted'] > 1]
+
 time_string = time.strftime("%Y%m%d")
-future_votes.to_file(f"output/anh_omalley_vote_by_2025_ward__{time_string}.gpkg", driver="GPKG")
+future_votes.to_file(f"output/anh_omalley_vote_by_2025_precinct__{time_string}.gpkg", driver="GPKG")
+
+df_future_votes = pd.DataFrame(future_votes.drop(columns='geometry'))
+df_future_votes.to_csv(
+    f"output/anh_omalley_vote_by_2025_precincts__{time_string}.csv",
+    index=False
+)
